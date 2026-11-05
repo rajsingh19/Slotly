@@ -23,6 +23,9 @@ from app.services.voice.base import BaseSTTService, BaseTTSService, BaseLLMServi
 from app.services.voice.stt_adapter import get_stt_service
 from app.services.voice.tts_adapter import get_tts_service
 from app.services.voice.llm_adapter import get_llm_service, RECEPTIONIST_TOOLS, HOSPITAL_SYSTEM_PROMPT
+from app.services.voice.agent.state_machine import ConversationContext, ConversationState
+from app.services.voice.agent.receptionist_agent import receptionist_agent
+from app.services.voice.agent.tools import tool_registry
 
 logger = get_logger(__name__)
 
@@ -45,6 +48,8 @@ class VoiceSessionState:
         self.pending_specialty: Optional[str] = None
         self.pending_date: Optional[str] = None
         self.pending_time: Optional[str] = None
+        # Step 4: Integrated conversational agent context
+        self.agent_context = ConversationContext(session_id=session_id, caller_phone=self.caller_phone)
 
 
 class VoicePipelineOrchestrator:
@@ -398,8 +403,8 @@ class VoicePipelineOrchestrator:
         """
         Process a single spoken user turn:
         1. Transcript ingestion & persistence
-        2. Dialogue management & function tool execution
-        3. Spoken response synthesis with sentence-boundary streaming
+        2. Dialogue management & function tool execution via receptionist agent
+        3. Spoken response synthesis with sentence-boundary streaming (handling Hindi purna-viram । and English punctuation)
         4. Real-time WebSocket packet transmission
         """
         t0 = time.time()
@@ -428,70 +433,27 @@ class VoicePipelineOrchestrator:
                 ).model_dump_json()
             )
 
-        # Generate LLM response & tool calls
-        llm_start = time.time()
-        llm_response = await self.llm.generate_response(
-            messages=state.conversation_history,
-            system_prompt=HOSPITAL_SYSTEM_PROMPT,
-            available_tools=RECEPTIONIST_TOOLS
+        # Ensure agent_context is synced
+        if not hasattr(state, "agent_context") or state.agent_context is None:
+            state.agent_context = ConversationContext(session_id=state.session_id, caller_phone=state.caller_phone)
+        state.agent_context.call_session_db_id = call_sess.id
+
+        # Execute turn through intelligent receptionist agent
+        reply_content, action_type, action_payload = await receptionist_agent.handle_turn(
+            db=db,
+            context=state.agent_context,
+            user_text=user_text
         )
-        llm_latency_ms = (time.time() - llm_start) * 1000
 
-        tool_calls = llm_response.get("tool_calls")
-        reply_content = llm_response.get("content", "")
-        action_type = None
-        action_payload = None
+        # Sync back to legacy state fields for full backwards compatibility
+        state.pending_doctor_id = state.agent_context.doctor_id
+        state.pending_doctor_name = state.agent_context.doctor_name
+        state.pending_specialty = state.agent_context.specialization
+        if state.agent_context.appointment_date:
+            state.pending_date = state.agent_context.appointment_date.isoformat()
+        state.pending_time = state.agent_context.appointment_time
 
-        if tool_calls:
-            for tc in tool_calls:
-                func_name = tc.get("function", {}).get("name")
-                args_str = tc.get("function", {}).get("arguments", "{}")
-                try:
-                    args = json.loads(args_str) if isinstance(args_str, str) else args_str
-                except Exception:
-                    args = {}
-
-                tool_result = await self.execute_tool(db, state, func_name, args)
-
-                # Formulate natural spoken response based on tool result
-                if func_name == "check_doctor_availability":
-                    if tool_result.get("status") == "success":
-                        reply_content = f"We have {tool_result['doctor_name']}, specialist in {tool_result['specialty']}, available on {tool_result['date']} at {tool_result['first_slot']}. Would you like me to book this for you?"
-                        action_type = "DOCTORS_FOUND"
-                        action_payload = tool_result
-                    else:
-                        reply_content = tool_result.get("message", "No matching doctors or slots found.")
-
-                elif func_name == "book_appointment":
-                    if tool_result.get("status") == "booked":
-                        reply_content = f"Your appointment has been successfully booked with {tool_result['doctor_name']} for {tool_result['date']} at {tool_result['time']}. Your booking reference is {tool_result['appointment_number']}."
-                        action_type = "BOOKING_CONFIRMED"
-                        action_payload = tool_result
-                    else:
-                        reply_content = f"I was unable to complete the booking. {tool_result.get('message', 'Please select another slot.')}"
-
-                elif func_name == "reschedule_appointment":
-                    if tool_result.get("status") == "rescheduled":
-                        reply_content = f"Your appointment {tool_result['appointment_number']} has been successfully rescheduled to {tool_result['new_date']} at {tool_result['new_time']}."
-                        action_type = "APPOINTMENT_RESCHEDULED"
-                        action_payload = tool_result
-                    else:
-                        reply_content = f"I could not reschedule your appointment. {tool_result.get('message', '')}"
-
-                elif func_name == "cancel_appointment":
-                    if tool_result.get("status") == "cancelled":
-                        reply_content = f"Your appointment {tool_result['appointment_number']} has been cancelled. Please let me know if you would like to book a different time."
-                        action_type = "APPOINTMENT_CANCELLED"
-                        action_payload = tool_result
-                    else:
-                        reply_content = f"I could not cancel the appointment. {tool_result.get('message', '')}"
-
-                elif func_name == "get_hospital_info":
-                    reply_content = f"{tool_result.get('hospital_name', 'Our hospital')} is located at {tool_result.get('address')}. Visiting hours are {tool_result.get('visiting_hours')}. For emergencies, call {tool_result.get('emergency_phone')}."
-
-        # Append assistant turn to history
         state.conversation_history.append({"role": "assistant", "content": reply_content})
-
         total_latency_ms = (time.time() - t0) * 1000
 
         # Persist conversation turn into CallSession transcript
@@ -499,7 +461,11 @@ class VoicePipelineOrchestrator:
         assistant_event = CallEvent(
             call_session_id=call_sess.id,
             event_type="SPEECH_SYNTHESIZED",
-            event_data=json.dumps({"reply_content": reply_content, "latency_ms": total_latency_ms}),
+            event_data=json.dumps({
+                "reply_content": reply_content,
+                "action_type": action_type,
+                "latency_ms": total_latency_ms
+            }),
         )
         db.add(assistant_event)
         await db.commit()
@@ -519,8 +485,8 @@ class VoicePipelineOrchestrator:
                 ).model_dump_json()
             )
 
-            # 2. Split response into sentences for streaming audio playback
-            sentences = [s.strip() for s in re.split(r'(?<=[.?!])\s+', reply_content) if s.strip()]
+            # 2. Split response into sentences for streaming audio playback (supports English and Hindi ।)
+            sentences = [s.strip() for s in re.split(r'(?<=[.?!।])\s+', reply_content) if s.strip()]
             if not sentences:
                 sentences = [reply_content]
 
@@ -540,7 +506,7 @@ class VoicePipelineOrchestrator:
                 )
 
         logger.info(
-            f"Voice turn completed in {total_latency_ms:.1f}ms (LLM: {llm_latency_ms:.1f}ms)",
+            f"Voice turn completed in {total_latency_ms:.1f}ms",
             extra={"action": "TURN_COMPLETE", "latency_ms": total_latency_ms}
         )
         return reply_content

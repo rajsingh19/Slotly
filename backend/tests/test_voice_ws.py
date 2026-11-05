@@ -59,3 +59,4 @@ def test_voice_websocket_streaming_exchange():
         # 7. Send HANGUP control frame
         hangup = VoiceFrame(type="control", data="HANGUP")
         websocket.send_text(hangup.model_dump_json())
+

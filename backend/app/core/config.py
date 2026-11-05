@@ -75,8 +75,10 @@ class Settings(BaseSettings):
     HOSPITAL_NAME: str = "Apex Multi-Specialty Hospital"
     HOSPITAL_PHONE: str = "+1-800-555-0199"
     HOSPITAL_ADDRESS: str = "742 Evergreen Healthcare Blvd, Medical District"
-    HOSPITAL_EMERGENCY_PHONE: str = "911"
+    HOSPITAL_EMERGENCY_PHONE: str = "108"
     HOSPITAL_VISITING_HOURS: str = "General Wards: 4:00 PM - 7:00 PM Daily | ICU: 11:00 AM - 12:00 PM"
+    TIMEZONE: str = "Asia/Kolkata"
+    MAX_CALL_DURATION_SECONDS: int = 600
 
     model_config = SettingsConfigDict(
         env_file=".env",

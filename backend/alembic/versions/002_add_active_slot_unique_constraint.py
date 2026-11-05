@@ -40,3 +40,4 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index("uq_active_patient_slot", table_name="appointments")
     op.drop_index("uq_active_doctor_slot", table_name="appointments")
+

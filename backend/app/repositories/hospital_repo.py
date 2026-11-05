@@ -15,3 +15,6 @@ class HospitalRepository(BaseRepository[Hospital]):
         res = await self.db.execute(stmt)
         return res.scalars().first()
 
+    async def get_first(self) -> Optional[Hospital]:
+        return await self.get_primary_hospital()
+
