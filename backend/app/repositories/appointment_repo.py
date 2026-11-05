@@ -31,6 +31,18 @@ class AppointmentRepository(BaseRepository[Appointment]):
         res = await self.db.execute(stmt)
         return res.scalars().first()
 
+    async def get_latest_active_by_patient_phone(self, phone: str) -> Optional[Appointment]:
+        from app.models.patient import Patient
+        stmt = select(Appointment).join(Patient).where(
+            Patient.phone_number == phone,
+            Appointment.status.in_(ACTIVE_STATUSES)
+        ).options(
+            selectinload(Appointment.patient),
+            selectinload(Appointment.doctor)
+        ).order_by(Appointment.appointment_date.desc())
+        res = await self.db.execute(stmt)
+        return res.scalars().first()
+
     async def check_doctor_double_booking(
         self,
         doctor_id: int,
@@ -138,3 +150,4 @@ class AppointmentRepository(BaseRepository[Appointment]):
         )
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
+

@@ -30,3 +30,4 @@ class CallEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     call_session = relationship("CallSession", back_populates="events")
+

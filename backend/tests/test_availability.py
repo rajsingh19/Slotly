@@ -27,3 +27,4 @@ async def test_get_doctor_availability(client: AsyncClient):
     slot_09 = next((s for s in doc_avail["slots"] if s["time"] == "09:00"), None)
     assert slot_09 is not None
     assert slot_09["is_available"] is True
+

@@ -45,3 +45,4 @@ class DoctorRepository(BaseRepository[Doctor]):
         stmt = select(Doctor).where(Doctor.is_active == True).order_by(Doctor.name.asc())
         res = await self.db.execute(stmt)
         return list(res.scalars().all())
+

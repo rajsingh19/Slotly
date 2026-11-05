@@ -21,3 +21,4 @@ async def get_analytics(
     patient counts, doctor workload breakdown, and call metrics.
     """
     return await service.get_analytics()
+

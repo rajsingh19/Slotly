@@ -32,3 +32,4 @@ async def test_patient_phone_validation_rejects_invalid_numbers(client: AsyncCli
     }
     res = await client.post("/api/patients", json=invalid_payload)
     assert res.status_code == 422
+

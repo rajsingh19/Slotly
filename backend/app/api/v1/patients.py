@@ -33,3 +33,4 @@ async def get_patient_by_id(
     Retrieve patient details by ID.
     """
     return await service.get_patient_by_id(id)
+

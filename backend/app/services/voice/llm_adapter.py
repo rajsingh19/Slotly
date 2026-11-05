@@ -132,14 +132,26 @@ class MockHospitalLLMService(BaseLLMService):
 
         # 2. Reschedule Appointment Intent
         if "reschedule" in msg_lower or "change appointment" in msg_lower or "move appointment" in msg_lower:
+            apt_match = re.search(r"APT-[\w-]+", last_message, re.IGNORECASE)
+            apt_id = apt_match.group(0).upper() if apt_match else ""
+            time_match = re.search(r"\b([01]?[0-9]|2[0-3]):[0-5][0-9]\b", last_message)
+            req_time = time_match.group(0) if time_match else "11:00"
+            target_date = (date.today() + timedelta(days=2)).isoformat()
+            if "tomorrow" in msg_lower:
+                target_date = (date.today() + timedelta(days=1)).isoformat()
+
             return {
-                "content": "I can certainly help you reschedule your appointment. Could you please provide your appointment number or registered phone number, and preferred date?",
+                "content": f"Rescheduling your appointment {apt_id or 'on file'} to {target_date} at {req_time}.",
                 "tool_calls": [
                     {
-                        "id": "call_reschedule_lookup",
+                        "id": "call_reschedule",
                         "function": {
-                            "name": "get_hospital_info",
-                            "arguments": json.dumps({"query": "reschedule"})
+                            "name": "reschedule_appointment",
+                            "arguments": json.dumps({
+                                "appointment_identifier": apt_id,
+                                "new_date": target_date,
+                                "new_time": req_time
+                            })
                         }
                     }
                 ],
@@ -147,41 +159,77 @@ class MockHospitalLLMService(BaseLLMService):
             }
 
         # 3. Cancel Appointment Intent
-        if "cancel" in msg_lower and "appointment" in msg_lower:
+        if "cancel" in msg_lower and ("appointment" in msg_lower or "booking" in msg_lower or "visit" in msg_lower):
             apt_match = re.search(r"APT-[\w-]+", last_message, re.IGNORECASE)
             apt_id = apt_match.group(0).upper() if apt_match else ""
-            if apt_id:
-                return {
-                    "content": f"I am cancelling appointment {apt_id} for you right away.",
-                    "tool_calls": [
-                        {
-                            "id": "call_cancel",
-                            "function": {
-                                "name": "cancel_appointment",
-                                "arguments": json.dumps({"appointment_identifier": apt_id, "reason": "Patient requested via voice assistant"})
-                            }
-                        }
-                    ],
-                    "finish_reason": "tool_calls"
-                }
             return {
-                "content": "I can help cancel your appointment. Please tell me your appointment reference number (e.g. APT-...) or your registered phone number.",
-                "tool_calls": None,
-                "finish_reason": "stop"
+                "content": f"I am cancelling appointment {apt_id or 'on file'} for you right away.",
+                "tool_calls": [
+                    {
+                        "id": "call_cancel",
+                        "function": {
+                            "name": "cancel_appointment",
+                            "arguments": json.dumps({"appointment_identifier": apt_id, "reason": "Patient requested via voice assistant"})
+                        }
+                    }
+                ],
+                "finish_reason": "tool_calls"
             }
 
-        # 4. Check Doctor Availability Intent
-        specialties = ["cardiology", "cardiologist", "orthopedic", "orthopedics", "pediatrics", "pediatrician", "neurology", "neurologist", "dermatology", "general medicine"]
+        # 4. Book Appointment Intent (Explicit booking or confirmation of proposed slot)
+        if ("book" in msg_lower or "confirm" in msg_lower or "yes" in msg_lower or "please schedule" in msg_lower) and not ("cancel" in msg_lower or "reschedule" in msg_lower):
+            time_match = re.search(r"\b([01]?[0-9]|2[0-3]):[0-5][0-9]\b", last_message)
+            req_time = time_match.group(0) if time_match else "10:00"
+            phone_match = re.search(r"(\+?[0-9]{10,15})", last_message)
+            req_phone = phone_match.group(0) if phone_match else "+15557778888"
+            pat_name = "Eleanor Vance" if "eleanor" in msg_lower else "Valued Patient"
+            target_date = (date.today() + timedelta(days=1)).isoformat()
+
+            return {
+                "content": f"Booking appointment for {pat_name} at {req_time}.",
+                "tool_calls": [
+                    {
+                        "id": "call_book",
+                        "function": {
+                            "name": "book_appointment",
+                            "arguments": json.dumps({
+                                "patient_name": pat_name,
+                                "patient_phone": req_phone,
+                                "date": target_date,
+                                "time": req_time,
+                                "reason_for_visit": "General Consultation"
+                            })
+                        }
+                    }
+                ],
+                "finish_reason": "tool_calls"
+            }
+
+        # 5. Check Doctor Availability Intent
+        spec_map = {
+            "cardiologist": "Cardiology",
+            "cardiology": "Cardiology",
+            "orthopedic": "Orthopedics",
+            "orthopedics": "Orthopedics",
+            "pediatrician": "Pediatrics",
+            "pediatrics": "Pediatrics",
+            "neurologist": "Neurology",
+            "neurology": "Neurology",
+            "dermatologist": "Dermatology",
+            "dermatology": "Dermatology",
+            "general physician": "General Medicine",
+            "general medicine": "General Medicine",
+        }
         detected_spec = None
-        for s in specialties:
-            if s in msg_lower:
-                detected_spec = s.capitalize()
+        for k, v in spec_map.items():
+            if k in msg_lower:
+                detected_spec = v
                 break
 
         if "doctor" in msg_lower or "appointment" in msg_lower or "available" in msg_lower or detected_spec:
             # Check availability tool call
             spec_arg = detected_spec or "Cardiology"
-            target_date = date.today().isoformat()
+            target_date = (date.today() + timedelta(days=1)).isoformat()
             if "tomorrow" in msg_lower:
                 target_date = (date.today() + timedelta(days=1)).isoformat()
 

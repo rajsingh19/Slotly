@@ -55,3 +55,4 @@ async def add_call_event(
     Record an event in the call session trajectory.
     """
     return await service.add_call_event(id, event_type, event_data)
+

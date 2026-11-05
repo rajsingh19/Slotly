@@ -59,3 +59,4 @@ class CallService:
         await self.db.commit()
         await self.db.refresh(event)
         return CallEventOut.model_validate(event)
+

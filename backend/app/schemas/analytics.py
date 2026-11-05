@@ -19,3 +19,4 @@ class AnalyticsOut(BaseModel):
     average_call_duration_seconds: float
     total_estimated_cost: float
     doctor_workload: List[DoctorWorkload]
+

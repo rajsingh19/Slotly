@@ -15,3 +15,4 @@ async def test_analytics_api(client: AsyncClient):
     assert data["total_calls"] >= 1
     assert "doctor_workload" in data
     assert len(data["doctor_workload"]) == 5
+

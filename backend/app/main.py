@@ -86,8 +86,9 @@ async def request_logging_middleware(request: Request, call_next):
     return response
 
 
-# Mount API routes under /api
+# Mount API routes under /api and /api/v1 for compatibility
 app.include_router(api_router, prefix="/api")
+app.include_router(api_router, prefix="/api/v1")
 
 # Mount root health check at /health
 app.include_router(root_health_router)

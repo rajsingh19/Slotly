@@ -25,3 +25,4 @@ async def get_doctor_availability(
     Returns slots with is_available=True or False.
     """
     return await service.get_availability(doctor_id=doctor_id, target_date=date)
+

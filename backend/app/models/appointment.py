@@ -1,6 +1,6 @@
 import uuid
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Index
+from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Index, text
 from sqlalchemy.orm import relationship
 from app.core.database import Base
 
@@ -27,6 +27,26 @@ class Appointment(Base):
     doctor = relationship("Doctor", back_populates="appointments")
 
     __table_args__ = (
+        # Partial unique index ensuring active slots cannot be double-booked
+        Index(
+            "uq_active_doctor_slot",
+            "doctor_id",
+            "appointment_date",
+            "appointment_time",
+            unique=True,
+            postgresql_where=text("status IN ('SCHEDULED', 'RESCHEDULED')"),
+            sqlite_where=text("status IN ('SCHEDULED', 'RESCHEDULED')"),
+        ),
+        # Partial unique index ensuring a patient cannot book overlapping active appointments
+        Index(
+            "uq_active_patient_slot",
+            "patient_id",
+            "appointment_date",
+            "appointment_time",
+            unique=True,
+            postgresql_where=text("status IN ('SCHEDULED', 'RESCHEDULED')"),
+            sqlite_where=text("status IN ('SCHEDULED', 'RESCHEDULED')"),
+        ),
         Index("ix_appointments_doctor_date_time", "doctor_id", "appointment_date", "appointment_time"),
         Index("ix_appointments_patient_date", "patient_id", "appointment_date"),
     )

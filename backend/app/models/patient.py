@@ -14,3 +14,4 @@ class Patient(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     appointments = relationship("Appointment", back_populates="patient", cascade="all, delete-orphan")
+

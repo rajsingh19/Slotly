@@ -98,3 +98,36 @@ async def test_appointment_rejects_past_date(client: AsyncClient):
     }
     res = await client.post("/api/appointments", json=payload)
     assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_concurrent_double_booking_prevention(client: AsyncClient):
+    import asyncio
+    target_date = (date.today() + timedelta(days=5)).isoformat()
+    payload_a = {
+        "doctor_id": 1,
+        "appointment_date": target_date,
+        "appointment_time": "16:00",
+        "patient_name": "Patient Alpha",
+        "patient_phone": "+15553334444",
+        "patient_email": "alpha@example.com"
+    }
+    payload_b = {
+        "doctor_id": 1,
+        "appointment_date": target_date,
+        "appointment_time": "16:00",
+        "patient_name": "Patient Beta",
+        "patient_phone": "+15555556666",
+        "patient_email": "beta@example.com"
+    }
+
+    res_a, res_b = await asyncio.gather(
+        client.post("/api/appointments", json=payload_a),
+        client.post("/api/appointments", json=payload_b),
+        return_exceptions=False
+    )
+
+    statuses = [res_a.status_code, res_b.status_code]
+    assert 201 in statuses, f"Expected one 201 Created, got statuses: {statuses}"
+    assert 409 in statuses, f"Expected one 409 Conflict, got statuses: {statuses}"
+

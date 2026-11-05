@@ -1,6 +1,7 @@
 from datetime import date
 from typing import Optional, List
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException, status
 
 from app.models.appointment import Appointment, generate_booking_reference
@@ -96,6 +97,13 @@ class AppointmentService:
             self.db.add(appointment)
             await self.db.commit()
             await self.db.refresh(appointment)
+        except IntegrityError as ie:
+            await self.db.rollback()
+            logger.warning(f"Concurrency conflict during appointment booking: {ie}")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This doctor slot has already been booked by another request. Please choose a different time slot."
+            )
         except Exception as e:
             await self.db.rollback()
             logger.error(f"Failed to book appointment: {e}", exc_info=True)
@@ -198,6 +206,13 @@ class AppointmentService:
         try:
             await self.db.commit()
             await self.db.refresh(appointment)
+        except IntegrityError as ie:
+            await self.db.rollback()
+            logger.warning(f"Concurrency conflict during appointment update: {ie}")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="This doctor slot has already been booked by another request. Please choose a different time slot."
+            )
         except Exception as e:
             await self.db.rollback()
             raise HTTPException(
@@ -225,3 +240,21 @@ class AppointmentService:
             "success": True,
             "message": f"Appointment #{appointment_id} ({appointment.booking_reference}) has been successfully cancelled."
         }
+
+    async def get_by_reference(self, reference: str) -> Optional[AppointmentOut]:
+        apt = await self.appointment_repo.get_by_reference(reference.strip().upper())
+        if not apt:
+            return None
+        return AppointmentOut.model_validate(apt)
+
+    async def find_appointment_by_ref_or_phone(self, identifier: str) -> Optional[Appointment]:
+        cleaned = identifier.strip()
+        if cleaned.upper().startswith("APT-"):
+            return await self.appointment_repo.get_by_reference(cleaned.upper())
+        # Try as phone number or numeric ID
+        if cleaned.isdigit():
+            apt = await self.appointment_repo.get_by_id_with_relations(int(cleaned))
+            if apt:
+                return apt
+        return await self.appointment_repo.get_latest_active_by_patient_phone(cleaned)
+

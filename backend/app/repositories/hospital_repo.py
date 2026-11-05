@@ -14,3 +14,4 @@ class HospitalRepository(BaseRepository[Hospital]):
         stmt = select(Hospital).order_by(Hospital.id.asc()).limit(1)
         res = await self.db.execute(stmt)
         return res.scalars().first()
+

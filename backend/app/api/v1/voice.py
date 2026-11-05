@@ -1,6 +1,8 @@
 import base64
 import time
+import json
 import uuid
+from datetime import datetime
 from typing import List, Optional
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,7 +16,7 @@ from app.api.deps import get_database_session, get_voice_pipeline
 from app.services.voice.pipeline import VoicePipelineOrchestrator, VoiceSessionState
 from app.schemas.common import APIResponse
 from app.schemas.voice import VoiceFrame, VoiceSessionStart
-from app.models.call_log import CallLog
+from app.models.call_session import CallSession, CallEvent
 
 logger = get_logger(__name__)
 
@@ -34,7 +36,7 @@ async def create_voice_session(
     state = VoiceSessionState(session_id=session_id, caller_phone=payload.caller_phone)
     active_sessions[session_id] = state
 
-    await pipeline.initialize_call(db, session_id, payload.caller_phone)
+    await pipeline.initialize_call(db, state)
 
     welcome_text = f"Hello! Thank you for calling {settings.HOSPITAL_NAME}. I am Maya, your AI voice assistant. How may I help you today?"
 
@@ -44,7 +46,7 @@ async def create_voice_session(
         data={
             "session_id": session_id,
             "welcome_message": welcome_text,
-            "ws_url": f"/api/v1/voice/ws/{session_id}"
+            "ws_url": f"/api/voice/ws/{session_id}"
         }
     )
 
@@ -82,7 +84,12 @@ async def list_recent_calls(
     limit: int = 20,
     db: AsyncSession = Depends(get_database_session)
 ):
-    stmt = select(CallLog).options(selectinload(CallLog.transcripts)).order_by(CallLog.created_at.desc()).limit(limit)
+    stmt = (
+        select(CallSession)
+        .options(selectinload(CallSession.events))
+        .order_by(CallSession.started_at.desc())
+        .limit(limit)
+    )
     res = await db.execute(stmt)
     calls = res.scalars().all()
 
@@ -90,21 +97,28 @@ async def list_recent_calls(
     for c in calls:
         formatted.append({
             "id": c.id,
-            "session_id": c.session_id,
-            "caller_phone": c.caller_phone,
+            "session_id": f"call-{c.id}",
+            "caller_phone": c.caller_number,
+            "call_direction": c.call_direction,
             "status": c.status,
             "duration_seconds": c.duration_seconds,
-            "turn_count": len(c.transcripts),
-            "created_at": c.created_at.isoformat(),
-            "transcripts": [
-                {"speaker": t.speaker, "message": t.message, "latency_ms": t.latency_ms}
-                for t in c.transcripts
-            ]
+            "started_at": c.started_at.isoformat() if c.started_at else "",
+            "ended_at": c.ended_at.isoformat() if c.ended_at else None,
+            "transcript": c.transcript or "",
+            "events_count": len(c.events),
+            "events": [
+                {
+                    "event_type": e.event_type,
+                    "event_data": e.event_data,
+                    "created_at": e.created_at.isoformat() if e.created_at else "",
+                }
+                for e in c.events
+            ],
         })
 
     return APIResponse(
         success=True,
-        message=f"Retrieved {len(formatted)} call logs",
+        message=f"Retrieved {len(formatted)} call sessions",
         data=formatted
     )
 
@@ -204,14 +218,24 @@ async def voice_websocket_endpoint(
         duration = int(time.time() - state.start_time)
         try:
             async with AsyncSessionLocal() as session:
-                call_res = await session.execute(select(CallLog).where(CallLog.session_id == session_id))
-                call = call_res.scalars().first()
-                if call:
-                    call.status = "COMPLETED"
-                    call.duration_seconds = duration
-                    await session.commit()
-        except Exception:
-            pass
+                # Update canonical CallSession
+                if state.call_session_db_id:
+                    cs_res = await session.execute(select(CallSession).where(CallSession.id == state.call_session_db_id))
+                    cs = cs_res.scalars().first()
+                    if cs:
+                        cs.status = "COMPLETED"
+                        cs.duration_seconds = duration
+                        cs.ended_at = datetime.utcnow()
+                        event = CallEvent(
+                            call_session_id=cs.id,
+                            event_type="CALL_COMPLETED",
+                            event_data=json.dumps({"duration_seconds": duration})
+                        )
+                        session.add(event)
+
+                await session.commit()
+        except Exception as e:
+            logger.warning(f"Error finalizing call duration: {e}")
 
         if session_id in active_sessions:
             del active_sessions[session_id]

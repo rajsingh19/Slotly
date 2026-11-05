@@ -7,3 +7,4 @@ class HealthCheck(BaseModel):
     database: str = "healthy"
     version: str = "1.0.0"
     timestamp: datetime
+

@@ -34,3 +34,4 @@ async def test_calls_and_events_api(client: AsyncClient):
     event = event_res.json()
     assert event["event_type"] == "SPEECH_RECOGNIZED"
     assert event["call_session_id"] == call_id
+

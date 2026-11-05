@@ -75,3 +75,4 @@ class AnalyticsService:
             total_estimated_cost=round(float(total_cost), 2),
             doctor_workload=workloads,
         )
+

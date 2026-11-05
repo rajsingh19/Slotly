@@ -42,3 +42,4 @@ class PatientService:
                 detail=f"Patient with ID {patient_id} not found."
             )
         return PatientOut.model_validate(patient)
+

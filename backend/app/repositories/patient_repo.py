@@ -39,3 +39,4 @@ class PatientRepository(BaseRepository[Patient]):
         self.db.add(new_patient)
         await self.db.flush()
         return new_patient
+

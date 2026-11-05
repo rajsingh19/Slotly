@@ -56,3 +56,4 @@ class CallSessionRepository(BaseRepository[CallSession]):
         self.db.add(event)
         await self.db.flush()
         return event
+
