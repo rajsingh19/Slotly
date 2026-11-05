@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/appointmentsview.tsx","./src/components/doctorslist.tsx","./src/components/header.tsx","./src/components/hospitalinfo.tsx","./src/components/settingsmodal.tsx","./src/components/voiceconsole.tsx","./src/hooks/usevoicecall.ts","./src/services/api.ts","./src/types/index.ts"],"version":"5.9.3"}
