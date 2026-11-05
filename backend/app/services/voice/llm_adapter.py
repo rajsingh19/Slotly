@@ -1,5 +1,7 @@
 import re
 import json
+import time
+import uuid
 import httpx
 from typing import List, Dict, Any, Optional
 from datetime import date, timedelta
@@ -9,13 +11,13 @@ from app.services.voice.base import BaseLLMService
 
 logger = get_logger(__name__)
 
-HOSPITAL_SYSTEM_PROMPT = """You are Maya, the friendly, empathetic, and professional AI Voice Receptionist at Apex Multi-Specialty Hospital.
+HOSPITAL_SYSTEM_PROMPT = f"""You are Maya, the friendly, empathetic, and professional AI Voice Receptionist at Apex Multi-Specialty Hospital.
 Your responsibilities:
 1. Warmly greet callers and understand their medical or administrative needs.
 2. Answer questions about hospital departments, doctor specialties, visiting hours, insurance, and emergency triage.
 3. Check doctor availability and schedule appointments.
 4. Assist with rescheduling or cancelling existing appointments.
-5. In case of life-threatening emergencies (e.g., chest pain, stroke, severe bleeding), immediately advise the caller to dial 911 or visit our 24/7 Emergency Ward.
+5. In case of life-threatening emergencies (e.g., chest pain, stroke, severe bleeding), immediately advise the caller to dial {settings.HOSPITAL_EMERGENCY_PHONE} or visit our 24/7 Emergency Ward.
 Always keep responses concise, conversational, and suitable for voice speech. Avoid long markdown lists or complex formatting.
 """
 
@@ -113,6 +115,21 @@ class MockHospitalLLMService(BaseLLMService):
         system_prompt: str = HOSPITAL_SYSTEM_PROMPT,
         available_tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
+        res = await self.generate_response_with_metadata(messages, system_prompt, available_tools)
+        return {
+            "content": res["content"],
+            "tool_calls": res["tool_calls"],
+            "finish_reason": res["finish_reason"]
+        }
+
+    async def generate_response_with_metadata(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: str = HOSPITAL_SYSTEM_PROMPT,
+        available_tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        start_time = time.perf_counter()
+
         last_message = ""
         for m in reversed(messages):
             if m.get("role") == "user":
@@ -124,10 +141,17 @@ class MockHospitalLLMService(BaseLLMService):
         # 1. Emergency Detection
         emergency_keywords = ["chest pain", "heart attack", "can't breathe", "cannot breathe", "severe bleeding", "unconscious", "stroke", "emergency"]
         if any(k in msg_lower for k in emergency_keywords):
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return {
                 "content": f"This sounds like a medical emergency. Please dial {settings.HOSPITAL_EMERGENCY_PHONE} immediately or proceed directly to our 24/7 Emergency Department at {settings.HOSPITAL_ADDRESS}. An emergency physician is on standby.",
                 "tool_calls": None,
-                "finish_reason": "stop"
+                "finish_reason": "stop",
+                "provider": "mock_llm",
+                "is_mock": True,
+                "latency_ms": round(latency_ms, 2),
+                "model": "rule_based_state_engine",
+                "status": "success",
+                "error": None
             }
 
         # 2. Reschedule Appointment Intent
@@ -140,6 +164,7 @@ class MockHospitalLLMService(BaseLLMService):
             if "tomorrow" in msg_lower:
                 target_date = (date.today() + timedelta(days=1)).isoformat()
 
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return {
                 "content": f"Rescheduling your appointment {apt_id or 'on file'} to {target_date} at {req_time}.",
                 "tool_calls": [
@@ -155,13 +180,20 @@ class MockHospitalLLMService(BaseLLMService):
                         }
                     }
                 ],
-                "finish_reason": "tool_calls"
+                "finish_reason": "tool_calls",
+                "provider": "mock_llm",
+                "is_mock": True,
+                "latency_ms": round(latency_ms, 2),
+                "model": "rule_based_state_engine",
+                "status": "success",
+                "error": None
             }
 
         # 3. Cancel Appointment Intent
         if "cancel" in msg_lower and ("appointment" in msg_lower or "booking" in msg_lower or "visit" in msg_lower):
             apt_match = re.search(r"APT-[\w-]+", last_message, re.IGNORECASE)
             apt_id = apt_match.group(0).upper() if apt_match else ""
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return {
                 "content": f"I am cancelling appointment {apt_id or 'on file'} for you right away.",
                 "tool_calls": [
@@ -173,7 +205,13 @@ class MockHospitalLLMService(BaseLLMService):
                         }
                     }
                 ],
-                "finish_reason": "tool_calls"
+                "finish_reason": "tool_calls",
+                "provider": "mock_llm",
+                "is_mock": True,
+                "latency_ms": round(latency_ms, 2),
+                "model": "rule_based_state_engine",
+                "status": "success",
+                "error": None
             }
 
         # 4. Book Appointment Intent (Explicit booking or confirmation of proposed slot)
@@ -185,6 +223,7 @@ class MockHospitalLLMService(BaseLLMService):
             pat_name = "Eleanor Vance" if "eleanor" in msg_lower else "Valued Patient"
             target_date = (date.today() + timedelta(days=1)).isoformat()
 
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return {
                 "content": f"Booking appointment for {pat_name} at {req_time}.",
                 "tool_calls": [
@@ -202,7 +241,13 @@ class MockHospitalLLMService(BaseLLMService):
                         }
                     }
                 ],
-                "finish_reason": "tool_calls"
+                "finish_reason": "tool_calls",
+                "provider": "mock_llm",
+                "is_mock": True,
+                "latency_ms": round(latency_ms, 2),
+                "model": "rule_based_state_engine",
+                "status": "success",
+                "error": None
             }
 
         # 5. Check Doctor Availability Intent
@@ -227,12 +272,12 @@ class MockHospitalLLMService(BaseLLMService):
                 break
 
         if "doctor" in msg_lower or "appointment" in msg_lower or "available" in msg_lower or detected_spec:
-            # Check availability tool call
             spec_arg = detected_spec or "Cardiology"
             target_date = (date.today() + timedelta(days=1)).isoformat()
             if "tomorrow" in msg_lower:
                 target_date = (date.today() + timedelta(days=1)).isoformat()
 
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return {
                 "content": f"Let me check the available doctors and appointment slots in {spec_arg} for {target_date}.",
                 "tool_calls": [
@@ -244,42 +289,76 @@ class MockHospitalLLMService(BaseLLMService):
                         }
                     }
                 ],
-                "finish_reason": "tool_calls"
+                "finish_reason": "tool_calls",
+                "provider": "mock_llm",
+                "is_mock": True,
+                "latency_ms": round(latency_ms, 2),
+                "model": "rule_based_state_engine",
+                "status": "success",
+                "error": None
             }
 
-        # 5. Hospital FAQs: visiting hours, address, insurance, parking
+        # 6. Hospital FAQs: visiting hours, address, insurance, parking
         if "visiting" in msg_lower or "hours" in msg_lower:
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return {
                 "content": f"Visiting hours at {settings.HOSPITAL_NAME} are: {settings.HOSPITAL_VISITING_HOURS}. Only two visitors are allowed per patient at a time.",
                 "tool_calls": None,
-                "finish_reason": "stop"
+                "finish_reason": "stop",
+                "provider": "mock_llm",
+                "is_mock": True,
+                "latency_ms": round(latency_ms, 2),
+                "model": "rule_based_state_engine",
+                "status": "success",
+                "error": None
             }
 
         if "insurance" in msg_lower or "mediclaim" in msg_lower:
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return {
-                "content": "We accept all major health insurance providers, including BlueCross, Medicare, Cigna, UnitedHealthcare, and Aetna. Cashless TPA claims desk is on the ground floor.",
+                "content": "We accept all major health insurance providers. Cashless TPA claims desk is on the ground floor.",
                 "tool_calls": None,
-                "finish_reason": "stop"
+                "finish_reason": "stop",
+                "provider": "mock_llm",
+                "is_mock": True,
+                "latency_ms": round(latency_ms, 2),
+                "model": "rule_based_state_engine",
+                "status": "success",
+                "error": None
             }
 
         if "address" in msg_lower or "location" in msg_lower or "where" in msg_lower:
+            latency_ms = (time.perf_counter() - start_time) * 1000
             return {
-                "content": f"{settings.HOSPITAL_NAME} is located at {settings.HOSPITAL_ADDRESS}. Free multi-level patient parking is available at Gate 2.",
+                "content": f"{settings.HOSPITAL_NAME} is located at {settings.HOSPITAL_ADDRESS}. Free patient parking is available at Gate 2.",
                 "tool_calls": None,
-                "finish_reason": "stop"
+                "finish_reason": "stop",
+                "provider": "mock_llm",
+                "is_mock": True,
+                "latency_ms": round(latency_ms, 2),
+                "model": "rule_based_state_engine",
+                "status": "success",
+                "error": None
             }
 
-        # 6. Default Welcome Greeting
+        # 7. Default Welcome Greeting
+        latency_ms = (time.perf_counter() - start_time) * 1000
         return {
             "content": f"Hello! Welcome to {settings.HOSPITAL_NAME}. I am Maya, your AI receptionist. How may I assist you today? You can ask about doctor availability, book or reschedule an appointment, or check visiting hours.",
             "tool_calls": None,
-            "finish_reason": "stop"
+            "finish_reason": "stop",
+            "provider": "mock_llm",
+            "is_mock": True,
+            "latency_ms": round(latency_ms, 2),
+            "model": "rule_based_state_engine",
+            "status": "success",
+            "error": None
         }
 
 
 class GeminiLLMService(BaseLLMService):
     """
-    Google Gemini API dialogue integration.
+    Google Gemini API dialogue integration with function declarations.
     """
     def __init__(self, api_key: Optional[str] = None):
         self.api_key = api_key or settings.GEMINI_API_KEY
@@ -291,8 +370,23 @@ class GeminiLLMService(BaseLLMService):
         system_prompt: str = HOSPITAL_SYSTEM_PROMPT,
         available_tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
+        res = await self.generate_response_with_metadata(messages, system_prompt, available_tools)
+        return {
+            "content": res["content"],
+            "tool_calls": res["tool_calls"],
+            "finish_reason": res["finish_reason"]
+        }
+
+    async def generate_response_with_metadata(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: str = HOSPITAL_SYSTEM_PROMPT,
+        available_tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        start_time = time.perf_counter()
+
         if not self.api_key:
-            return await MockHospitalLLMService().generate_response(messages, system_prompt, available_tools)
+            return await MockHospitalLLMService().generate_response_with_metadata(messages, system_prompt, available_tools)
 
         endpoint = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent?key={self.api_key}"
         
@@ -314,9 +408,30 @@ class GeminiLLMService(BaseLLMService):
             }
         }
 
+        # Convert available tools to Gemini function declarations
+        if available_tools:
+            func_declarations = []
+            for t in available_tools:
+                fn = t.get("function", {})
+                func_declarations.append({
+                    "name": fn.get("name"),
+                    "description": fn.get("description", ""),
+                    "parameters": fn.get("parameters", {"type": "object"}),
+                })
+            payload["tools"] = [{"function_declarations": func_declarations}]
+
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.post(endpoint, json=payload)
+                latency_ms = (time.perf_counter() - start_time) * 1000
+
+                if res.status_code == 400 and "API_KEY_INVALID" in res.text:
+                    logger.error("Gemini API key is invalid.")
+                    fallback = await MockHospitalLLMService().generate_response_with_metadata(messages, system_prompt, available_tools)
+                    fallback["status"] = "unauthorized"
+                    fallback["error"] = "Invalid Gemini API Key"
+                    return fallback
+
                 res.raise_for_status()
                 data = res.json()
                 candidates = data.get("candidates", [])
@@ -324,16 +439,42 @@ class GeminiLLMService(BaseLLMService):
                     parts = candidates[0].get("content", {}).get("parts", [])
                     text_parts = [p.get("text", "") for p in parts if "text" in p]
                     reply_text = " ".join(text_parts).strip()
+
+                    # Extract any tool calls from parts
+                    tool_calls = []
+                    for p in parts:
+                        if "functionCall" in p:
+                            fc = p["functionCall"]
+                            tool_calls.append({
+                                "id": f"call_{uuid.uuid4().hex[:8]}",
+                                "type": "function",
+                                "function": {
+                                    "name": fc.get("name"),
+                                    "arguments": json.dumps(fc.get("args", {}))
+                                }
+                            })
+
                     return {
                         "content": reply_text or "How can I help you with your hospital appointment today?",
-                        "tool_calls": None,
-                        "finish_reason": "stop"
+                        "tool_calls": tool_calls if tool_calls else None,
+                        "finish_reason": "tool_calls" if tool_calls else "stop",
+                        "provider": "gemini",
+                        "is_mock": False,
+                        "latency_ms": round(latency_ms, 2),
+                        "model": self.model,
+                        "status": "success",
+                        "error": None
                     }
         except Exception as e:
+            latency_ms = (time.perf_counter() - start_time) * 1000
             logger.error(f"Gemini API error: {e}. Falling back to rule engine.", exc_info=True)
-            return await MockHospitalLLMService().generate_response(messages, system_prompt, available_tools)
+            fallback = await MockHospitalLLMService().generate_response_with_metadata(messages, system_prompt, available_tools)
+            fallback["status"] = "fallback"
+            fallback["error"] = str(e)
+            return fallback
 
-        return await MockHospitalLLMService().generate_response(messages, system_prompt, available_tools)
+        fallback = await MockHospitalLLMService().generate_response_with_metadata(messages, system_prompt, available_tools)
+        return fallback
 
 
 class OpenAILLMService(BaseLLMService):
@@ -350,8 +491,23 @@ class OpenAILLMService(BaseLLMService):
         system_prompt: str = HOSPITAL_SYSTEM_PROMPT,
         available_tools: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
+        res = await self.generate_response_with_metadata(messages, system_prompt, available_tools)
+        return {
+            "content": res["content"],
+            "tool_calls": res["tool_calls"],
+            "finish_reason": res["finish_reason"]
+        }
+
+    async def generate_response_with_metadata(
+        self,
+        messages: List[Dict[str, Any]],
+        system_prompt: str = HOSPITAL_SYSTEM_PROMPT,
+        available_tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        start_time = time.perf_counter()
+
         if not self.api_key:
-            return await MockHospitalLLMService().generate_response(messages, system_prompt, available_tools)
+            return await MockHospitalLLMService().generate_response_with_metadata(messages, system_prompt, available_tools)
 
         endpoint = "https://api.openai.com/v1/chat/completions"
         headers = {
@@ -371,6 +527,15 @@ class OpenAILLMService(BaseLLMService):
         try:
             async with httpx.AsyncClient(timeout=15.0) as client:
                 res = await client.post(endpoint, headers=headers, json=payload)
+                latency_ms = (time.perf_counter() - start_time) * 1000
+
+                if res.status_code == 401:
+                    logger.error("OpenAI API authentication failed: Invalid API key.")
+                    fallback = await MockHospitalLLMService().generate_response_with_metadata(messages, system_prompt, available_tools)
+                    fallback["status"] = "unauthorized"
+                    fallback["error"] = "Invalid OpenAI API Key"
+                    return fallback
+
                 res.raise_for_status()
                 data = res.json()
                 choice = data["choices"][0]
@@ -378,11 +543,21 @@ class OpenAILLMService(BaseLLMService):
                 return {
                     "content": message.get("content") or "",
                     "tool_calls": message.get("tool_calls"),
-                    "finish_reason": choice.get("finish_reason", "stop")
+                    "finish_reason": choice.get("finish_reason", "stop"),
+                    "provider": "openai",
+                    "is_mock": False,
+                    "latency_ms": round(latency_ms, 2),
+                    "model": self.model,
+                    "status": "success",
+                    "error": None
                 }
         except Exception as e:
+            latency_ms = (time.perf_counter() - start_time) * 1000
             logger.error(f"OpenAI API error: {e}. Falling back to rule engine.", exc_info=True)
-            return await MockHospitalLLMService().generate_response(messages, system_prompt, available_tools)
+            fallback = await MockHospitalLLMService().generate_response_with_metadata(messages, system_prompt, available_tools)
+            fallback["status"] = "fallback"
+            fallback["error"] = str(e)
+            return fallback
 
 
 def get_llm_service() -> BaseLLMService:

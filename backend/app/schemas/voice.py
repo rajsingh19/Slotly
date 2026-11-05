@@ -20,6 +20,7 @@ class VoiceFrame(BaseModel):
     action_type: Optional[str] = None    # e.g., "BOOKING_CONFIRMED", "DOCTOR_FOUND", "CALL_ENDED"
     action_payload: Optional[Dict[str, Any]] = None
     latency_ms: Optional[float] = None
+    provider: Optional[str] = None       # "sarvam_saarika", "sarvam_bulbul", "mock_stt", "mock_sine_pcm", "gemini", "openai"
     is_final: bool = False
 
 

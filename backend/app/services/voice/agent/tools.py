@@ -278,7 +278,9 @@ class SafeToolRegistry:
         cache_key = args.idempotency_key or f"book_{args.patient_id}_{args.doctor_id}_{args.date}_{args.time}"
         if cache_key in self._idempotency_cache:
             logger.info(f"Returning cached booking response for idempotency key: {cache_key}")
-            return self._idempotency_cache[cache_key]
+            cached = dict(self._idempotency_cache[cache_key])
+            cached["idempotent_replay"] = True
+            return cached
 
         target_date = date.fromisoformat(args.date)
         appointment_service = AppointmentService(db)
@@ -528,3 +530,4 @@ class SafeToolRegistry:
 
 # Singleton instance
 tool_registry = SafeToolRegistry()
+

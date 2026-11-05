@@ -472,6 +472,9 @@ class VoicePipelineOrchestrator:
 
         # Sentence-boundary streaming over WebSocket
         if websocket:
+            tts_provider = "sarvam_bulbul" if bool(getattr(self.tts, "api_key", None)) else "mock_sine_pcm"
+            llm_provider = getattr(settings, "LLM_PROVIDER", "mock")
+
             # 1. Send complete text frame with action metadata
             await websocket.send_text(
                 VoiceFrame(
@@ -481,6 +484,7 @@ class VoicePipelineOrchestrator:
                     latency_ms=total_latency_ms,
                     action_type=action_type,
                     action_payload=action_payload,
+                    provider=llm_provider,
                     is_final=True
                 ).model_dump_json()
             )
@@ -501,6 +505,7 @@ class VoicePipelineOrchestrator:
                         data=chunk_b64,
                         format="wav",
                         sample_rate=16000,
+                        provider=tts_provider,
                         is_final=is_last_sentence
                     ).model_dump_json()
                 )

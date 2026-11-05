@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import { VoiceTranscriptMessage } from '../types';
 import { api } from '../services/api';
 
-export type CallStatus = 'idle' | 'connecting' | 'connected' | 'listening' | 'thinking' | 'speaking' | 'error';
+export type CallStatus = 'idle' | 'connecting' | 'connected' | 'listening' | 'recording' | 'thinking' | 'speaking' | 'error';
 
 export function useVoiceCall() {
   const [callStatus, setCallStatus] = useState<CallStatus>('idle');
@@ -12,19 +12,41 @@ export function useVoiceCall() {
   const [audioLevel, setAudioLevel] = useState<number>(0);
   const [lastAction, setLastAction] = useState<{ type: string; payload: any } | null>(null);
   const [callDuration, setCallDuration] = useState<number>(0);
+  const [micPermissionDenied, setMicPermissionDenied] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isRecording, setIsRecording] = useState<boolean>(false);
 
   const socketRef = useRef<WebSocket | null>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const durationTimerRef = useRef<any>(null);
   const speechRecognitionRef = useRef<any>(null);
 
-  // Play incoming base64 WAV/MP3 audio
-  const playAudioChunk = useCallback((base64Data: string) => {
+  // Audio Playback Queue for smooth sentence-boundary streaming
+  const audioQueueRef = useRef<string[]>([]);
+  const isPlayingRef = useRef<boolean>(false);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const processAudioQueue = useCallback(() => {
+    if (isPlayingRef.current || audioQueueRef.current.length === 0) {
+      if (!isPlayingRef.current && audioQueueRef.current.length === 0) {
+        setCallStatus(prev => (prev === 'speaking' ? 'listening' : prev));
+      }
+      return;
+    }
+
+    const nextBase64 = audioQueueRef.current.shift();
+    if (!nextBase64) return;
+
     try {
-      const binaryString = atob(base64Data);
+      isPlayingRef.current = true;
+      setCallStatus('speaking');
+
+      const binaryString = atob(nextBase64);
       const len = binaryString.length;
       const bytes = new Uint8Array(len);
       for (let i = 0; i < len; i++) {
@@ -33,29 +55,51 @@ export function useVoiceCall() {
       const blob = new Blob([bytes.buffer], { type: 'audio/wav' });
       const audioUrl = URL.createObjectURL(blob);
       const audio = new Audio(audioUrl);
-      
-      setCallStatus('speaking');
+      currentAudioRef.current = audio;
+
       audio.onended = () => {
         URL.revokeObjectURL(audioUrl);
-        setCallStatus('listening');
+        currentAudioRef.current = null;
+        isPlayingRef.current = false;
+        processAudioQueue();
       };
+
+      audio.onerror = (e) => {
+        console.warn('Audio playback error, skipping chunk:', e);
+        URL.revokeObjectURL(audioUrl);
+        currentAudioRef.current = null;
+        isPlayingRef.current = false;
+        processAudioQueue();
+      };
+
       audio.play().catch(e => {
-        console.warn('Audio playback auto-play restriction:', e);
-        setCallStatus('listening');
+        console.warn('Audio autoplay prevented or error:', e);
+        URL.revokeObjectURL(audioUrl);
+        currentAudioRef.current = null;
+        isPlayingRef.current = false;
+        processAudioQueue();
       });
     } catch (e) {
-      console.error('Error decoding/playing audio chunk:', e);
-      setCallStatus('listening');
+      console.error('Error decoding audio chunk:', e);
+      isPlayingRef.current = false;
+      processAudioQueue();
     }
   }, []);
 
-  // Connect WebSocket
+  const playAudioChunk = useCallback((base64Data: string) => {
+    audioQueueRef.current.push(base64Data);
+    processAudioQueue();
+  }, [processAudioQueue]);
+
+  // Connect WebSocket & Setup Media
   const startCall = useCallback(async (phone?: string) => {
     try {
       setCallStatus('connecting');
       setMessages([]);
       setLastAction(null);
       setCallDuration(0);
+      setErrorMessage(null);
+      setMicPermissionDenied(false);
 
       // 1. Initialize session via REST
       const session = await api.createVoiceSession(phone);
@@ -69,7 +113,6 @@ export function useVoiceCall() {
 
       ws.onopen = () => {
         setCallStatus('connected');
-        // Start duration counter
         durationTimerRef.current = setInterval(() => {
           setCallDuration(prev => prev + 1);
         }, 1000);
@@ -86,6 +129,7 @@ export function useVoiceCall() {
               message: frame.data || '',
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               latency_ms: frame.latency_ms,
+              provider: frame.provider,
               action_type: frame.action_type,
               action_payload: frame.action_payload,
             };
@@ -105,6 +149,7 @@ export function useVoiceCall() {
       ws.onerror = (err) => {
         console.error('WebSocket voice error:', err);
         setCallStatus('error');
+        setErrorMessage('Voice WebSocket connection encountered an error.');
       };
 
       ws.onclose = () => {
@@ -114,6 +159,8 @@ export function useVoiceCall() {
       // 3. Setup Browser Microphone
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaStreamRef.current = stream;
+
         const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
         audioContextRef.current = audioCtx;
         const source = audioCtx.createMediaStreamSource(stream);
@@ -136,13 +183,48 @@ export function useVoiceCall() {
         };
         updateLevel();
 
-        // Optional Browser Speech Recognition for seamless local speech
+        // Setup MediaRecorder for pushing voice packets to backend
+        try {
+          const recorder = new MediaRecorder(stream);
+          mediaRecorderRef.current = recorder;
+
+          recorder.ondataavailable = (e) => {
+            if (e.data.size > 0) {
+              audioChunksRef.current.push(e.data);
+            }
+          };
+
+          recorder.onstop = async () => {
+            if (audioChunksRef.current.length > 0) {
+              const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+              audioChunksRef.current = [];
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                const base64Audio = (reader.result as string).split(',')[1];
+                if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN && base64Audio) {
+                  setCallStatus('thinking');
+                  socketRef.current.send(JSON.stringify({
+                    type: 'audio',
+                    data: base64Audio,
+                    format: 'wav'
+                  }));
+                }
+              };
+              reader.readAsDataURL(audioBlob);
+            }
+            setIsRecording(false);
+          };
+        } catch (recErr) {
+          console.warn('MediaRecorder not available or failed:', recErr);
+        }
+
+        // Web Speech Recognition for continuous transcription
         const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
         if (SpeechRecognition) {
           const recognition = new SpeechRecognition();
           recognition.continuous = true;
           recognition.interimResults = false;
-          recognition.lang = 'en-US';
+          recognition.lang = 'en-IN';
 
           recognition.onresult = (e: any) => {
             const transcript = e.results[e.results.length - 1][0].transcript.trim();
@@ -156,23 +238,57 @@ export function useVoiceCall() {
             console.warn('Speech recognition warning:', e.error);
           };
 
-          recognition.start();
-          speechRecognitionRef.current = recognition;
+          try {
+            recognition.start();
+            speechRecognitionRef.current = recognition;
+          } catch (e) {}
         }
 
-      } catch (micErr) {
-        console.warn('Microphone access denied or unavailable. Fallback to typed voice simulation mode.', micErr);
-        // User can still type prompts or use one-click voice prompt chips
+      } catch (micErr: any) {
+        console.warn('Microphone access denied or unavailable:', micErr);
+        setMicPermissionDenied(true);
+        setErrorMessage('Microphone access denied. You can continue speaking via text or simulate voice turns.');
       }
 
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to start call:', err);
       setCallStatus('error');
+      setErrorMessage(err.message || 'Failed to start voice session');
     }
   }, [playAudioChunk]);
 
+  // Start / Stop manual audio recording turn
+  const startRecordingAudio = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'inactive') {
+      audioChunksRef.current = [];
+      mediaRecorderRef.current.start();
+      setIsRecording(true);
+      setCallStatus('recording');
+    }
+  }, []);
+
+  const stopRecordingAudio = useCallback(() => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      mediaRecorderRef.current.stop();
+    }
+  }, []);
+
   // End call
   const endCall = useCallback(() => {
+    // Clear audio playback queue
+    audioQueueRef.current = [];
+    if (currentAudioRef.current) {
+      try {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      } catch (e) {}
+    }
+    isPlayingRef.current = false;
+
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      try { mediaRecorderRef.current.stop(); } catch (e) {}
+    }
+
     if (socketRef.current) {
       try {
         socketRef.current.send(JSON.stringify({ type: 'control', data: 'HANGUP' }));
@@ -184,6 +300,11 @@ export function useVoiceCall() {
     if (speechRecognitionRef.current) {
       try { speechRecognitionRef.current.stop(); } catch (e) {}
       speechRecognitionRef.current = null;
+    }
+
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
     }
 
     if (animFrameRef.current) {
@@ -203,6 +324,7 @@ export function useVoiceCall() {
 
     setCallStatus('idle');
     setAudioLevel(0);
+    setIsRecording(false);
   }, []);
 
   // Send a text speech turn (works via WebSocket or REST)
@@ -244,7 +366,15 @@ export function useVoiceCall() {
   }, [sessionId]);
 
   const toggleMute = () => {
-    setIsMuted(prev => !prev);
+    setIsMuted(prev => {
+      const next = !prev;
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getAudioTracks().forEach(track => {
+          track.enabled = !next;
+        });
+      }
+      return next;
+    });
   };
 
   useEffect(() => {
@@ -261,9 +391,14 @@ export function useVoiceCall() {
     audioLevel,
     lastAction,
     callDuration,
+    micPermissionDenied,
+    errorMessage,
+    isRecording,
     startCall,
     endCall,
     sendTurn,
     toggleMute,
+    startRecordingAudio,
+    stopRecordingAudio,
   };
 }

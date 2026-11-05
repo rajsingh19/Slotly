@@ -13,7 +13,8 @@ import {
   Send,
   CalendarCheck,
   CalendarX,
-  Volume2
+  Volume2,
+  Radio
 } from 'lucide-react';
 import { useVoiceCall } from '../hooks/useVoiceCall';
 
@@ -30,13 +31,18 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({ onAppointmentUpdated
     audioLevel,
     lastAction,
     callDuration,
+    micPermissionDenied,
+    errorMessage,
+    isRecording,
     startCall,
     endCall,
     sendTurn,
     toggleMute,
+    startRecordingAudio,
+    stopRecordingAudio,
   } = useVoiceCall();
 
-  const [callerPhone, setCallerPhone] = useState('+1-555-0199');
+  const [callerPhone, setCallerPhone] = useState('+91-98765-43210');
   const [typedMessage, setTypedMessage] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -64,6 +70,7 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({ onAppointmentUpdated
   };
 
   const suggestedPrompts = [
+    'Mujhe skin doctor ko dikhana hai',
     'Check availability for Cardiology tomorrow',
     'Book appointment with Dr. Sharma for general checkup',
     'What are the visiting hours for general wards?',
@@ -81,6 +88,8 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({ onAppointmentUpdated
             className={`absolute -top-24 -left-24 w-64 h-64 rounded-full blur-3xl pointer-events-none transition-all duration-700 ${
               callStatus === 'speaking'
                 ? 'bg-sky-500/20'
+                : callStatus === 'recording'
+                ? 'bg-rose-500/25'
                 : callStatus === 'listening'
                 ? 'bg-emerald-500/20'
                 : callStatus === 'thinking'
@@ -99,141 +108,186 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({ onAppointmentUpdated
                   callStatus === 'connected' || callStatus === 'listening'
                     ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
                     : callStatus === 'speaking'
-                    ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20'
+                    ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20 animate-pulse'
+                    : callStatus === 'recording'
+                    ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20 animate-pulse'
                     : callStatus === 'thinking'
                     ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                    : callStatus === 'connecting'
-                    ? 'bg-indigo-500/10 text-indigo-400 border border-indigo-500/20'
+                    : callStatus === 'error'
+                    ? 'bg-red-500/10 text-red-400 border border-red-500/20'
                     : 'bg-slate-800 text-slate-400'
                 }`}
               >
-                {callStatus === 'idle' ? 'Ready to Call' : callStatus}
+                ● {callStatus}
               </span>
             </div>
 
             {callStatus !== 'idle' && (
-              <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
+              <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono bg-slate-800/60 px-2.5 py-1 rounded-full border border-slate-700/50">
                 <Clock className="w-3.5 h-3.5 text-slate-400" />
                 <span>{formatSeconds(callDuration)}</span>
               </div>
             )}
           </div>
 
-          {/* Avatar and Animated Visualizer */}
-          <div className="flex flex-col items-center justify-center my-6">
-            <div className="relative flex items-center justify-center">
-              {/* Ripple circles while speaking/listening */}
-              {(callStatus === 'speaking' || callStatus === 'listening') && (
-                <div
-                  className={`absolute w-36 h-36 rounded-full border border-sky-400/30 animate-ping opacity-75`}
-                  style={{ animationDuration: '2s' }}
-                />
-              )}
-
-              <div
-                className={`w-28 h-28 rounded-full flex items-center justify-center border-2 transition-all duration-300 shadow-2xl ${
-                  callStatus === 'speaking'
-                    ? 'bg-sky-600/20 border-sky-400 shadow-sky-500/30 scale-105'
-                    : callStatus === 'listening'
-                    ? 'bg-emerald-600/20 border-emerald-400 shadow-emerald-500/30'
-                    : callStatus === 'thinking'
-                    ? 'bg-amber-600/20 border-amber-400 animate-pulse'
-                    : 'bg-slate-800/80 border-slate-700'
-                }`}
-              >
-                <Bot
-                  className={`w-14 h-14 transition-colors ${
-                    callStatus === 'speaking'
-                      ? 'text-sky-300'
-                      : callStatus === 'listening'
-                      ? 'text-emerald-300'
-                      : 'text-slate-400'
-                  }`}
-                />
+          {/* Microphone Permission Warning Banner */}
+          {micPermissionDenied && (
+            <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-xl flex items-start gap-2.5 text-amber-200 text-xs">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Microphone Permission Blocked</p>
+                <p className="opacity-90 mt-0.5">
+                  Microphone is unavailable or blocked in browser settings. You can still use the text input below to test full voice agent workflows.
+                </p>
               </div>
             </div>
+          )}
 
-            <h3 className="mt-4 font-semibold text-white text-base">Maya (AI Receptionist)</h3>
-            <p className="text-xs text-slate-400 text-center max-w-xs mt-1">
-              {callStatus === 'idle' && 'Click Start Call to speak or test appointment booking.'}
-              {callStatus === 'connecting' && 'Establishing low-latency voice pipeline...'}
-              {callStatus === 'listening' && 'Listening to your voice... Speak now.'}
-              {callStatus === 'thinking' && 'Checking doctors and hospital database...'}
-              {callStatus === 'speaking' && 'Speaking audio reply via Sarvam AI / Bulbul TTS...'}
+          {/* General Error Banner */}
+          {errorMessage && !micPermissionDenied && (
+            <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-xl flex items-start gap-2.5 text-red-200 text-xs">
+              <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-medium">Connection Notice</p>
+                <p className="opacity-90 mt-0.5">{errorMessage}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Central AI Avatar / Waveform Visualizer */}
+          <div className="py-6 flex flex-col items-center justify-center">
+            <div className="relative">
+              <div
+                className={`w-28 h-28 rounded-full flex items-center justify-center transition-all duration-300 ${
+                  callStatus === 'speaking'
+                    ? 'bg-gradient-to-tr from-sky-500 to-indigo-500 shadow-2xl shadow-sky-500/40 ring-4 ring-sky-400/30 scale-105'
+                    : callStatus === 'recording'
+                    ? 'bg-gradient-to-tr from-rose-500 to-pink-600 shadow-2xl shadow-rose-500/40 ring-4 ring-rose-400/30 scale-105'
+                    : callStatus === 'listening'
+                    ? 'bg-gradient-to-tr from-emerald-500 to-teal-500 shadow-xl shadow-emerald-500/20'
+                    : callStatus === 'thinking'
+                    ? 'bg-gradient-to-tr from-amber-500 to-orange-500 animate-pulse shadow-xl shadow-amber-500/20'
+                    : 'bg-slate-800 border border-slate-700'
+                }`}
+              >
+                {callStatus === 'speaking' ? (
+                  <Volume2 className="w-12 h-12 text-white animate-pulse" />
+                ) : callStatus === 'recording' ? (
+                  <Radio className="w-12 h-12 text-white animate-pulse" />
+                ) : callStatus === 'listening' ? (
+                  <Mic className="w-12 h-12 text-white" />
+                ) : callStatus === 'thinking' ? (
+                  <Sparkles className="w-12 h-12 text-white animate-spin" />
+                ) : (
+                  <Bot className="w-12 h-12 text-slate-400" />
+                )}
+              </div>
+
+              {/* Pulsing rings when speaking or recording */}
+              {(callStatus === 'speaking' || callStatus === 'recording') && (
+                <div
+                  className={`absolute inset-0 rounded-full animate-ping pointer-events-none opacity-25 ${
+                    callStatus === 'speaking' ? 'bg-sky-400' : 'bg-rose-400'
+                  }`}
+                />
+              )}
+            </div>
+
+            {/* Speaking / Listening State Text */}
+            <p className="mt-4 font-medium text-sm text-slate-200">
+              {callStatus === 'speaking' && 'Maya is speaking...'}
+              {callStatus === 'recording' && 'Recording microphone audio...'}
+              {callStatus === 'listening' && (isMuted ? 'Microphone muted' : 'Listening for your voice...')}
+              {callStatus === 'thinking' && 'Processing your request...'}
+              {callStatus === 'connected' && 'Call connected'}
+              {callStatus === 'connecting' && 'Establishing WebSocket call...'}
+              {callStatus === 'idle' && 'AI Receptionist Ready'}
+              {callStatus === 'error' && 'Session interrupted'}
             </p>
 
-            {/* Audio Waveform Equalizer Bars */}
-            <div className="flex items-center gap-1.5 h-8 mt-5">
-              {[0.4, 0.7, 1.0, 0.6, 0.8, 1.2, 0.5, 0.9, 0.4].map((multiplier, idx) => {
-                const isActive = callStatus === 'speaking' || callStatus === 'listening';
-                const heightPct = isActive
-                  ? Math.max(15, Math.min(100, (audioLevel || 40) * multiplier))
-                  : 12;
-                return (
+            {/* Audio Waveform Meter */}
+            {callStatus !== 'idle' && (
+              <div className="w-full max-w-xs mt-3 flex items-center gap-1.5 justify-center">
+                <span className="text-[10px] text-slate-500 font-mono">MIC</span>
+                <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-700">
                   <div
-                    key={idx}
-                    className={`w-1.5 rounded-full transition-all duration-100 ${
-                      callStatus === 'speaking'
-                        ? 'bg-sky-400'
-                        : callStatus === 'listening'
-                        ? 'bg-emerald-400'
-                        : 'bg-slate-700'
-                    }`}
-                    style={{ height: `${heightPct}%` }}
+                    className="h-full bg-gradient-to-r from-emerald-500 via-sky-500 to-indigo-500 rounded-full transition-all duration-75"
+                    style={{ width: `${Math.min(100, Math.max(8, audioLevel))}%` }}
                   />
-                );
-              })}
-            </div>
+                </div>
+                <span className="text-[10px] text-slate-400 font-mono w-6 text-right">{audioLevel}%</span>
+              </div>
+            )}
           </div>
 
-          {/* Caller Details & Call Button */}
-          <div className="pt-4 border-t border-slate-800/80 flex flex-col gap-3">
+          {/* Caller Details & Controls */}
+          <div className="mt-4 pt-4 border-t border-slate-800/80">
             {callStatus === 'idle' && (
-              <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">
-                  Caller Phone Number (for Appointment Record):
+              <div className="mb-4">
+                <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                  Caller Phone Number (for Patient Lookup/Registration)
                 </label>
                 <input
                   type="text"
                   value={callerPhone}
                   onChange={(e) => setCallerPhone(e.target.value)}
-                  placeholder="+1-555-0199"
+                  placeholder="+91-98765-43210"
                   className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
                 />
               </div>
             )}
 
-            <div className="flex items-center gap-3">
-              {callStatus === 'idle' ? (
-                <button
-                  onClick={() => startCall(callerPhone)}
-                  className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-sky-500/25 transition-all transform active:scale-[0.98]"
-                >
-                  <Phone className="w-5 h-5" />
-                  <span>Start AI Reception Call</span>
-                </button>
-              ) : (
-                <>
+            <div className="flex flex-col gap-2.5">
+              <div className="flex items-center gap-3">
+                {callStatus === 'idle' ? (
                   <button
-                    onClick={toggleMute}
-                    className={`p-3 rounded-xl border transition-colors ${
-                      isMuted
-                        ? 'bg-red-500/10 border-red-500/30 text-red-400'
-                        : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
-                    }`}
-                    title={isMuted ? 'Unmute' : 'Mute'}
+                    onClick={() => startCall(callerPhone)}
+                    className="flex-1 py-3 px-4 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-sky-500/25 transition-all transform active:scale-[0.98]"
                   >
-                    {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                    <Phone className="w-5 h-5" />
+                    <span>Start AI Reception Call</span>
                   </button>
+                ) : (
+                  <>
+                    <button
+                      onClick={toggleMute}
+                      className={`p-3 rounded-xl border transition-colors ${
+                        isMuted
+                          ? 'bg-red-500/10 border-red-500/30 text-red-400'
+                          : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+                      }`}
+                      title={isMuted ? 'Unmute' : 'Mute'}
+                    >
+                      {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                    </button>
 
-                  <button
-                    onClick={endCall}
-                    className="flex-1 py-3 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-red-500/25 transition-all"
-                  >
-                    <PhoneOff className="w-5 h-5" />
-                    <span>End Call</span>
-                  </button>
-                </>
+                    <button
+                      onClick={endCall}
+                      className="flex-1 py-3 px-4 rounded-xl bg-red-600 hover:bg-red-500 text-white font-medium flex items-center justify-center gap-2 shadow-lg shadow-red-500/25 transition-all"
+                    >
+                      <PhoneOff className="w-5 h-5" />
+                      <span>End Call</span>
+                    </button>
+                  </>
+                )}
+              </div>
+
+              {/* Push-to-talk live mic recording button when call is active */}
+              {callStatus !== 'idle' && (
+                <button
+                  onMouseDown={startRecordingAudio}
+                  onMouseUp={stopRecordingAudio}
+                  onTouchStart={startRecordingAudio}
+                  onTouchEnd={stopRecordingAudio}
+                  className={`w-full py-2.5 px-3 rounded-xl border text-xs font-semibold flex items-center justify-center gap-2 transition-all ${
+                    isRecording
+                      ? 'bg-rose-600 text-white border-rose-500 shadow-lg shadow-rose-500/30 scale-[0.99]'
+                      : 'bg-slate-800/90 hover:bg-slate-800 text-slate-200 border-slate-700'
+                  }`}
+                >
+                  <Radio className={`w-3.5 h-3.5 ${isRecording ? 'text-white animate-pulse' : 'text-rose-400'}`} />
+                  <span>{isRecording ? 'Release to Send Voice Audio' : 'Hold to Speak (Live Mic)'}</span>
+                </button>
               )}
             </div>
           </div>
@@ -243,7 +297,7 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({ onAppointmentUpdated
         {lastAction && (
           <div
             className={`p-4 rounded-xl border transition-all ${
-              lastAction.type === 'BOOKING_CONFIRMED'
+              lastAction.type === 'BOOKING_CONFIRMED' || lastAction.type === 'BOOKING_SUCCESS'
                 ? 'bg-emerald-950/40 border-emerald-700/60 text-emerald-200'
                 : lastAction.type === 'APPOINTMENT_CANCELLED'
                 ? 'bg-amber-950/40 border-amber-700/60 text-amber-200'
@@ -251,19 +305,27 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({ onAppointmentUpdated
             }`}
           >
             <div className="flex items-start gap-3">
-              {lastAction.type === 'BOOKING_CONFIRMED' && <CalendarCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />}
-              {lastAction.type === 'APPOINTMENT_CANCELLED' && <CalendarX className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />}
-              {lastAction.type === 'DOCTORS_FOUND' && <CheckCircle2 className="w-5 h-5 text-sky-400 shrink-0 mt-0.5" />}
+              {(lastAction.type === 'BOOKING_CONFIRMED' || lastAction.type === 'BOOKING_SUCCESS') && (
+                <CalendarCheck className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
+              )}
+              {lastAction.type === 'APPOINTMENT_CANCELLED' && (
+                <CalendarX className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              )}
+              {lastAction.type === 'DOCTORS_FOUND' && (
+                <CheckCircle2 className="w-5 h-5 text-sky-400 shrink-0 mt-0.5" />
+              )}
 
               <div>
                 <p className="font-semibold text-sm">
-                  {lastAction.type === 'BOOKING_CONFIRMED' && 'Appointment Confirmed!'}
+                  {(lastAction.type === 'BOOKING_CONFIRMED' || lastAction.type === 'BOOKING_SUCCESS') && 'Appointment Confirmed!'}
                   {lastAction.type === 'APPOINTMENT_CANCELLED' && 'Appointment Cancelled'}
                   {lastAction.type === 'APPOINTMENT_RESCHEDULED' && 'Appointment Rescheduled'}
                   {lastAction.type === 'DOCTORS_FOUND' && 'Available Doctors Found'}
                 </p>
                 <p className="text-xs opacity-90 mt-0.5">
-                  {lastAction.payload?.appointment_number && `Ref: ${lastAction.payload.appointment_number} • `}
+                  {(lastAction.payload?.appointment_number || lastAction.payload?.booking_reference) && (
+                    `Ref: ${lastAction.payload?.appointment_number || lastAction.payload?.booking_reference} • `
+                  )}
                   {lastAction.payload?.doctor_name && `With ${lastAction.payload.doctor_name} • `}
                   {lastAction.payload?.time && `${lastAction.payload.time}`}
                 </p>
@@ -363,8 +425,13 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({ onAppointmentUpdated
                           ⚡ {Math.round(m.latency_ms)}ms
                         </span>
                       )}
+                      {m.provider && (
+                        <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 font-mono text-[10px]">
+                          {m.provider}
+                        </span>
+                      )}
                       {m.action_type && (
-                        <span className="px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 font-mono text-[10px]">
+                        <span className="px-1.5 py-0.5 rounded bg-sky-500/20 text-sky-300 font-mono text-[10px]">
                           {m.action_type}
                         </span>
                       )}
@@ -384,7 +451,7 @@ export const VoiceConsole: React.FC<VoiceConsoleProps> = ({ onAppointmentUpdated
               type="text"
               value={typedMessage}
               onChange={(e) => setTypedMessage(e.target.value)}
-              placeholder="Type a message or spoken command (e.g. 'Book Dr. Sharma tomorrow')..."
+              placeholder="Type a message or spoken command (e.g. 'Mujhe skin doctor ko dikhana hai')..."
               className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-sky-500"
             />
             <button

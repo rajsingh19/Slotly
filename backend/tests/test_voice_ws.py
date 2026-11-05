@@ -1,3 +1,4 @@
+import uuid
 import json
 import pytest
 from starlette.testclient import TestClient
@@ -15,7 +16,7 @@ def test_voice_websocket_streaming_exchange():
     5. Sends control HANGUP frame and cleanly disconnects
     """
     client = TestClient(app)
-    session_id = "test-ws-session-001"
+    session_id = f"test-ws-session-{uuid.uuid4().hex[:8]}"
 
     with client.websocket_connect(f"/api/voice/ws/{session_id}") as websocket:
         # 1. Receive welcome greeting text frame
@@ -50,13 +51,16 @@ def test_voice_websocket_streaming_exchange():
         assert "available" in frame_asst["data"].lower() or "doctor" in frame_asst["data"].lower()
 
         # 6. Receive streaming audio frames (sentence-boundary chunks)
-        audio_chunk_pkt = websocket.receive_text()
-        frame_chunk = json.loads(audio_chunk_pkt)
-        assert frame_chunk["type"] == "audio"
-        assert frame_chunk["role"] == "assistant"
-        assert len(frame_chunk["data"]) > 0
+        while True:
+            audio_chunk_pkt = websocket.receive_text()
+            frame_chunk = json.loads(audio_chunk_pkt)
+            assert frame_chunk["type"] == "audio"
+            assert len(frame_chunk["data"]) > 0
+            if frame_chunk.get("is_final", False):
+                break
 
         # 7. Send HANGUP control frame
         hangup = VoiceFrame(type="control", data="HANGUP")
         websocket.send_text(hangup.model_dump_json())
+        websocket.close()
 

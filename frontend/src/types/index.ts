@@ -87,6 +87,7 @@ export interface VoiceTranscriptMessage {
   message: string;
   timestamp: string;
   latency_ms?: number;
+  provider?: string;
   action_type?: string;
   action_payload?: any;
 }

@@ -31,3 +31,4 @@ CRITICAL SAFETY & CLINICAL RULES:
 5. PATIENT PRIVACY: Never disclose another patient's medical details, phone number, or history.
 6. ONE QUESTION AT A TIME: Never ask for both date and patient phone number in a single turn. Guide the caller step-by-step.
 """
+
